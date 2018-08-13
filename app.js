@@ -2,23 +2,29 @@ const _ = require('lodash');
 const express = require('express');
 const bodyParser = require('body-parser');
 const {ObjectID} = require('mongodb');
+process.env.NODE_ENV !== "production" && require('dotenv').config();
+let {mongoose} = require('./db/mongoose'),
+    {Todo} = require('./models/todo'),
+    {User} = require('./models/user'),
+    {authenticate} = require('./middleware/authenticate'),
+    authRoutes = require('./authentication');
 
-var {mongoose} = require('./db/mongoose');
-var {Todo} = require('./models/todo');
-var {User} = require('./models/user');
 
 var app = express();
-const port = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
 app.use((err, req, res, next) => {
-  if(err instanceof SyntaxError) return res.status(400).send(err);
-  next();
+  err instanceof SyntaxError ? res.status(400).send(err) : res.status(500).send();
 });
+
+
+app.use(authRoutes);
+app.use(authenticate);
 
 app.post('/todos', (req, res) => {
   var todo = new Todo({
-    text: req.body.text
+    text: req.body.text,
+    _creator: req.user._id
   });
 
   todo.save().then((doc) => {
@@ -29,7 +35,9 @@ app.post('/todos', (req, res) => {
 });
 
 app.get('/todos', (req, res) => {
-  Todo.find().then((todos) => {
+  Todo.find({
+    _creator: req.user._id
+  }).then((todos) => {
     res.send({todos});
   }, (e) => {
     res.status(400).send(e);
@@ -43,7 +51,10 @@ app.get('/todos/:id', (req, res) => {
     return res.status(404).send();
   }
 
-  Todo.findById(id).then((todo) => {
+  Todo.findOne({
+    _id: id,
+    _creator: req.user._id
+  }).then((todo) => {
     if (!todo) {
       return res.status(404).send();
     }
@@ -61,7 +72,10 @@ app.delete('/todos/:id', (req, res) => {
     return res.status(404).send();
   }
 
-  Todo.findByIdAndRemove(id).then((todo) => {
+  Todo.findOneAndRemove({
+    _id: id,
+    _creator: req.user._id
+  }).then((todo) => {
     if (!todo) {
       return res.status(404).send();
     }
@@ -74,19 +88,20 @@ app.delete('/todos/:id', (req, res) => {
 
 app.patch('/todos/:id', (req, res) => {
   var id = req.params.id;
+  var body = _.pick(req.body, ['text', 'completed']);
 
   if (!ObjectID.isValid(id)) {
     return res.status(404).send();
   }
 
-  if (req.body.completed) {
-    req.body.completedAt = new Date().getTime();
+  if (_.isBoolean(body.completed) && body.completed) {
+    body.completedAt = new Date().getTime();
   } else {
-    req.body.completed = false;
-    req.body.completedAt = null;
+    body.completed = false;
+    body.completedAt = null;
   }
 
-  Todo.findByIdAndUpdate(id, {$set: req.body}, {new: true}).then((todo) => {
+  Todo.findOneAndUpdate({_id: id, _creator: req.user._id}, {$set: body}, {new: true}).then((todo) => {
     if (!todo) {
       return res.status(404).send();
     }
@@ -97,8 +112,7 @@ app.patch('/todos/:id', (req, res) => {
   })
 });
 
-app.listen(port, () => {
-  console.log(`Started up at port ${port}`);
-});
 
-module.exports = {app};
+app.listen(process.env.PORT, () => {
+  console.log(`Started up at port ${process.env.PORT}`);
+});
